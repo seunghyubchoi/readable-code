@@ -1,81 +1,89 @@
 package cleancode.studycafe.tobe;
 
+import cleancode.studycafe.tobe.config.StudyCafeConfig;
 import cleancode.studycafe.tobe.exception.AppException;
 import cleancode.studycafe.tobe.io.InputHandler;
 import cleancode.studycafe.tobe.io.OutputHandler;
 import cleancode.studycafe.tobe.io.StudyCafeFileHandler;
-import cleancode.studycafe.tobe.model.StudyCafeLockerPass;
-import cleancode.studycafe.tobe.model.StudyCafePass;
-import cleancode.studycafe.tobe.model.StudyCafePassType;
+import cleancode.studycafe.tobe.model.*;
 
-import java.util.List;
+import java.util.Optional;
 
 public class StudyCafePassMachine {
 
-    private final InputHandler inputHandler = new InputHandler();
-    private final OutputHandler outputHandler = new OutputHandler();
+  private final InputHandler inputHandler;
+  private final OutputHandler outputHandler;
+  private final StudyCafeFileHandler studyCafeFileHandler;
 
-    public void run() {
-        try {
-            outputHandler.showWelcomeMessage();
-            outputHandler.showAnnouncement();
+  public StudyCafePassMachine(StudyCafeConfig studyCafeConfig) {
+    this.inputHandler = studyCafeConfig.getInputHandler();
+    this.outputHandler = studyCafeConfig.getOutputHandler();
+    this.studyCafeFileHandler = studyCafeConfig.getStudyCafeFileHandler();
+  }
 
-            outputHandler.askPassTypeSelection();
-            StudyCafePassType studyCafePassType = inputHandler.getPassTypeSelectingUserAction();
+  public void run() {
+    try {
+      showInitialMessages();
+      StudyCafePassType studyCafePassType = getPassType();
+      StudyCafePass selectedPass = getPassBy(studyCafePassType);
+      getLockerPassBy(selectedPass);
+    } catch (AppException e) {
+      outputHandler.showSimpleMessage(e.getMessage());
+    } catch (Exception e) {
+      outputHandler.showSimpleMessage("알 수 없는 오류가 발생했습니다.");
+    }
+  }
 
-            if (studyCafePassType == StudyCafePassType.HOURLY) {
-                StudyCafeFileHandler studyCafeFileHandler = new StudyCafeFileHandler();
-                List<StudyCafePass> studyCafePasses = studyCafeFileHandler.readStudyCafePasses();
-                List<StudyCafePass> hourlyPasses = studyCafePasses.stream()
-                    .filter(studyCafePass -> studyCafePass.getPassType() == StudyCafePassType.HOURLY)
-                    .toList();
-                outputHandler.showPassListForSelection(hourlyPasses);
-                StudyCafePass selectedPass = inputHandler.getSelectPass(hourlyPasses);
-                outputHandler.showPassOrderSummary(selectedPass, null);
-            } else if (studyCafePassType == StudyCafePassType.WEEKLY) {
-                StudyCafeFileHandler studyCafeFileHandler = new StudyCafeFileHandler();
-                List<StudyCafePass> studyCafePasses = studyCafeFileHandler.readStudyCafePasses();
-                List<StudyCafePass> weeklyPasses = studyCafePasses.stream()
-                    .filter(studyCafePass -> studyCafePass.getPassType() == StudyCafePassType.WEEKLY)
-                    .toList();
-                outputHandler.showPassListForSelection(weeklyPasses);
-                StudyCafePass selectedPass = inputHandler.getSelectPass(weeklyPasses);
-                outputHandler.showPassOrderSummary(selectedPass, null);
-            } else if (studyCafePassType == StudyCafePassType.FIXED) {
-                StudyCafeFileHandler studyCafeFileHandler = new StudyCafeFileHandler();
-                List<StudyCafePass> studyCafePasses = studyCafeFileHandler.readStudyCafePasses();
-                List<StudyCafePass> fixedPasses = studyCafePasses.stream()
-                    .filter(studyCafePass -> studyCafePass.getPassType() == StudyCafePassType.FIXED)
-                    .toList();
-                outputHandler.showPassListForSelection(fixedPasses);
-                StudyCafePass selectedPass = inputHandler.getSelectPass(fixedPasses);
+  private StudyCafePassType getPassType() {
+    return inputHandler.getPassTypeSelectingUserAction();
+  }
 
-                List<StudyCafeLockerPass> lockerPasses = studyCafeFileHandler.readLockerPasses();
-                StudyCafeLockerPass lockerPass = lockerPasses.stream()
-                    .filter(option ->
-                        option.getPassType() == selectedPass.getPassType()
-                            && option.getDuration() == selectedPass.getDuration()
-                    )
-                    .findFirst()
-                    .orElse(null);
-
-                boolean lockerSelection = false;
-                if (lockerPass != null) {
-                    outputHandler.askLockerPass(lockerPass);
-                    lockerSelection = inputHandler.getLockerSelection();
-                }
-
-                if (lockerSelection) {
-                    outputHandler.showPassOrderSummary(selectedPass, lockerPass);
-                } else {
-                    outputHandler.showPassOrderSummary(selectedPass, null);
-                }
-            }
-        } catch (AppException e) {
-            outputHandler.showSimpleMessage(e.getMessage());
-        } catch (Exception e) {
-            outputHandler.showSimpleMessage("알 수 없는 오류가 발생했습니다.");
-        }
+  private void getLockerPassBy(StudyCafePass selectedPass) {
+    if (!doesSelectedTypeNeedLocker(selectedPass)) {
+      return;
     }
 
+    Optional<StudyCafeLockerPass> optionalLocker =
+      findMatchingLockerPass(selectedPass)
+        .filter(this::isLockerSelectedByUser);
+
+    outputHandler.showPassOrderSummary(selectedPass, optionalLocker.orElse(null));
+  }
+
+  private Optional<StudyCafeLockerPass> findMatchingLockerPass(StudyCafePass selectedPass) {
+    return studyCafeFileHandler.readLockerPasses()
+      .stream()
+      .filter(option ->
+        option.getPassType() == selectedPass.getPassType() &&
+          option.getDuration() == selectedPass.getDuration())
+      .findFirst();
+  }
+
+  private boolean isLockerSelectedByUser(StudyCafeLockerPass lockerPass) {
+    outputHandler.askLockerPass(lockerPass);
+    return inputHandler.getLockerSelection();
+  }
+
+  private boolean doesSelectedTypeNeedLocker(StudyCafePass selectedPass) {
+    return selectedPass.doesTypeNeedLocker();
+  }
+
+  private StudyCafePass getPassBy(StudyCafePassType studyCafePassType) {
+    StudyCafePasses selectedPassList = filterPassesBy(studyCafePassType);
+    outputHandler.showPassListForSelection(selectedPassList);
+    StudyCafePass selectedPass = inputHandler.getSelectPass(selectedPassList);
+    outputHandler.showPassOrderSummary(selectedPass, null);
+    return selectedPass;
+  }
+
+  private StudyCafePasses filterPassesBy(StudyCafePassType studyCafePassType) {
+    StudyCafePasses studyCafePasses = studyCafeFileHandler.readStudyCafePasses();
+    return studyCafePassType.getPassListBy(studyCafePasses);
+  }
+
+  private void showInitialMessages() {
+    outputHandler.showWelcomeMessage();
+    outputHandler.showAnnouncement();
+    outputHandler.askPassTypeSelection();
+  }
 }
